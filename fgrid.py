@@ -22,17 +22,19 @@ Public License for more details.
 """
 
 import numpy as np
-import os,math
-from ftool import*
+import os,math,platform
+
 from time import time
+from copy import deepcopy
+
 try:
 	from matplotlib import pyplot as plt
 	from mpl_toolkits.mplot3d import axes3d
 except ImportError:
 	'placeholder'
-from fpost import *
-from copy import deepcopy
-import platform
+	
+from fpost import*
+from ftool import*
 
 WINDOWS = platform.system()=='Windows'
 if WINDOWS: copyStr = 'copy'; delStr = 'del'; slash = '\\'
@@ -128,12 +130,6 @@ class fnode(object):				#Node object.
 	def _get_generator(self): return self._generator
 	def _set_generator(self,value): self._generator = value
 	generator = property(_get_generator, _set_generator) #: (*dict*) Dictionary of generator properties associated with node.
-	#def _get_variable(self): return self._variable
-	#def _set_variable(self,value): self._variable = value
-	#variable = property(_get_variable, _set_variable) #: (*dict*) Dictionary of thermodynamic properties associated with node. Only accessible when initial conditions files are loaded in conjunction with the input file and grid.
-	#def _get_material(self): return self._material
-	#def _set_material(self,value): self._material = value
-	#material = property(_get_material, _set_material) #: (*dict*) Dictionary of material properties associated with node.
 	def _get_info(self):
 		prntStr='\n Node number: '+str(self.index)+'\n'
 		prntStr+='\nGeometric properties.......\n'
@@ -217,7 +213,7 @@ class fnode(object):				#Node object.
 			for nd in con.nodes:
 				if nd != self: ndlist.append(nd)
 		return ndlist
-	connected_nodes = property(_get_connected_nodes)		#: (*lst[fnode]*) List of node objects connected to this node.
+	connected_nodes = property(_get_connected_nodes)		#: (*lst[fnode]*) List of node objects connected to this node. This information only available if full_connectivity=True passed to fgrid.read()
 	def _get_connections(self): return self._connections
 	connections = property(_get_connections)#: (*lst[fconn]*) List of connection objects of which the node is a member.
 	def _get_elements(self): return self._elements
@@ -261,7 +257,7 @@ class fnode(object):				#Node object.
 	def _get_dispi(self): return self._dispi
 	dispi = property(_get_dispi) #: (*fl64*) initial displacements at node.
 	def _get_P(self): return self._P
-	P = property(_get_P) #: (*fl64*) pressure at node.
+	P = property(_get_P) #: (*fl64*) pressure at node during a simulation.
 	def _get_T(self): return self._T
 	T = property(_get_T) #: (*fl64*) temperature at node.
 	def _get_S(self): return self._S
@@ -474,38 +470,37 @@ class fgrid(object):				#Grid object.
 		self._conn={}				
 		self._elemlist=[]			
 		self._elem={}				
-		self._node_tree=None		
-		self._filename=''			
+		self._node_tree=None			
 		self._dimensions=3
 		self._parent = None
 		self._full_connectivity = full_connectivity
+		self._path = fpath(parent=self)	
+		self._path.filename=''	
 	def __repr__(self): return self.filename
 	def read(self,gridfilename,full_connectivity=False): 
 		"""Read data from an FEHM grid file.
 
 		:param gridfilename: name of FEHM grid file, including path specification.
 		:type gridfilename: str
-		:param full_connectivity: read element and conection data and construct corresponding objects. Consumes siginifcant time and memory and is rarely used.
+		:param full_connectivity: read element and connection data and construct corresponding objects. Defaults to False. Use if access to connectivity information will be useful.
 		:type full_connectivity: bool
 		"""
+		
 		self._full_connectivity = full_connectivity
-		self._filename = gridfilename 
+		self._path.filename = gridfilename 
 		if gridfilename.endswith('.stor'):
-			self.read_stor(gridfilename)
+			self.read_stor()
 		else:
-			self._read_inp(gridfilename)
+			self._read_inp()
 			self.add_nodetree()
 		if self._parent: self._parent._add_boundary_zones()
-	def _read_inp(self,gridfilename): 		#Read in fehm meshfile for node,element data .
+	def _read_inp(self): 		#Read in fehm meshfile for node,element data .
 		self._nodelist = []
 		self._connlist = []
 		self._elemlist = []
-		infile = open(gridfilename)
-		if self._parent:
-			#if slash in gridfilename: gridfilename = gridfilename.split(slash)[-1]
-			self._parent.gridfilename = gridfilename
-			self._filename = gridfilename
-			self._parent.files.grid = gridfilename
+		infile = open(self._path.full_path)
+		
+		if self._parent: self._parent.files.grid = self._path.filename
 			
 		ln = infile.readline()
 		N = int(infile.readline())
@@ -563,7 +558,7 @@ class fgrid(object):				#Grid object.
 			 (len(np.unique([nd.position[2] for nd in self.nodelist])) == 1)):
 			self._dimensions = 2
 		else: self._dimensions = 3
-	def write(self,filename='',format='fehm'):
+	def write(self,filename=None,format='fehm'):
 		"""Write grid object to an FEHM grid file.
 
 		:param filename: name of FEHM grid file to write to, including path specification, e.g. 'c:\\path\\file_out.inp'
@@ -572,19 +567,32 @@ class fgrid(object):				#Grid object.
 		:type format: str
 
 		"""
-		if filename: self._filename=filename
-		if self.filename=='': self._filename='fdata.grid'
-		if slash in self.filename:
-			make_directory(self.filename)
-		if format == 'fehm': self._write_fehm(filename)
-		elif format == 'avs': self._write_avs(filename)
-	def _write_fehm(self,filename):
-		if self._parent:
-			if self._parent.work_dir and not os.path.isdir(self._parent.work_dir): 		
-				os.makedirs(self._parent.work_dir)		
-			outfile = open(self._parent.work_dir+self.filename,'w')
+		if filename: self._path.filename=filename
+		if self.filename == None: self._path.filename='default_GRID.inp'
+		
+		# ASSUME THAT IF FILENAME IS PASSED - THIS IS WHERE THE FILE WILL BE WRITTEN
+		if filename:
+			try:
+				os.makedirs(self._path.absolute_to_file)
+			except:
+				pass
+			outfile = open(self._path.full_path,'w')
+		# IF FILE NAME IS NOT PASSED, GRID WILL BE WRITTEN TO WORK DIRECTORY IF IT EXISTS, OR CURRENT IF NOT
 		else:
-			outfile = open(self.filename,'w')
+			if self._parent: 	# HAVE PARENT?
+				if self._parent.work_dir:	# HAVE WORKING DIRECTORY?
+					try:
+						os.makedirs(self._path.absolute_to_workdir)
+					except:
+						pass
+					outfile = open(self._path.absolute_to_workdir+slash+self._path.filename,'w')
+			else:
+				outfile = open(self._path.full_path,'w')
+		
+		if format == 'fehm': self._write_fehm(outfile)
+		elif format == 'avs': self._write_avs(outfile)
+	def _write_fehm(self,outfile):
+			
 		outfile.write('coor\n')
 		outfile.write('   '+str(len(self.nodelist))+'\n')		
 		for nd in self.nodelist: 
@@ -612,13 +620,7 @@ class fgrid(object):				#Grid object.
 			
 		outfile.write('\nstop\n')
 		outfile.close()
-	def _write_avs(self,filename):
-		if self._parent:
-			if self._parent.work_dir and not os.path.isdir(self._parent.work_dir): 
-				os.makedirs(self._parent.work_dir)		
-			outfile = open(self._parent.work_dir+self.filename,'w')
-		else:
-			outfile = open(self.filename,'w')
+	def _write_avs(self,infile):
 		outfile.write(str(self.number_nodes)+' '+str(self.number_elems)+' 0 0 0\n')
 		for nd in self.nodelist: 
 			outfile.write('%11d' % nd.index +'        ')
@@ -656,17 +658,28 @@ class fgrid(object):				#Grid object.
 		:param z: Unique set of z-coordinates.
 		:type z: list[fl64]
 		"""
+		# ASSUMPTIONS FOR MAKE
+		# if no parent - interpret string literally
+		# if parent but NO work dir - interpret string literally
+		# if parent and work dir but relative or absolute - interpret string relative to cwd
+		# if parent and work dir and grid name ONLY - grid goes in work dir
+		
+		# PASS FULL PATH specification into fmake
+		
+		temp_path = fpath()
+		temp_path.filename = gridfilename
 		if self._parent:
-			if self._parent.work_dir and not os.path.isdir(self._parent.work_dir): 
-				os.makedirs(self._parent.work_dir)	
-			fm = fmake(self._parent.work_dir+gridfilename,x,y,z,self._full_connectivity)
+			if self._parent.work_dir:
+				fm = fmake(self._path.absolute_to_workdir+slash+temp_path.filename,x,y,z,self._full_connectivity)
+				fm.write()		
+				self.read(self._path.absolute_to_workdir+slash+temp_path.filename,self._full_connectivity)
+			fm = fmake(temp_path.full_path,x,y,z,self._full_connectivity)
 			fm.write()		
-			self.read(self._parent.work_dir+gridfilename)
-			self._parent._add_boundary_zones()
+			self.read(temp_path.full_path,self._full_connectivity)
 		else:
-			fm = fmake(gridfilename,x,y,z)
+			fm = fmake(temp_path.full_path,x,y,z,self._full_connectivity)
 			fm.write()		
-			self.read(gridfilename)
+			self.read(temp_path.full_path,self._full_connectivity)
 	def volumes(self,volumefilename):
 		""" Reads a lagrit generated file containing control volume information.
 		
@@ -728,7 +741,7 @@ class fgrid(object):				#Grid object.
 		:type save: str
 		:param angle: 	View angle of zone. First number is tilt angle in degrees, second number is azimuth. Alternatively, if angle is 'x', 'y', 'z', view is aligned along the corresponding axis.
 		:type angle: [fl64,fl64], str
-		:param color: Color of zone.
+		:param color: Colour of zone.
 		:type color: str, [fl64,fl64,fl64]
 		:param connections: Plot connections. If ``True`` all connections plotted. If between 0 and 1, random proportion plotted. If greater than 1, specified number plotted.
 		:type connections: bool
@@ -1016,7 +1029,7 @@ class fgrid(object):				#Grid object.
 		else:			
 			return [c-0.51*r,c+0.51*r]
 	bounding_box = property(get_bounding_box)	
-	def _get_filename(self): return self._filename
+	def _get_filename(self): return self._path.filename
 	filename = property(_get_filename)#: (*str*) Name of FEHM grid file.
 	def _get_node(self): return self._node
 	node = property(_get_node)#: (*dict[fnode]*) Dictionary of grid nodes, indexed by node integer.
@@ -1068,10 +1081,6 @@ class fmake(object): 				#Rectilinear grid constructor.
 		self._meshname = ''
 		self._full_connectivity = full_connectivity
 		if meshname: self._meshname = meshname
-	def seed(self,edge='x',method='equal', number = None, size = None, bias = None):
-		"""Allocate mesh seeds to edges. NOT FINISHED (not started...)
-		"""
-		
 	def write(self,meshname=''):
 		"""Write out the grid file.
 		
@@ -1080,8 +1089,16 @@ class fmake(object): 				#Rectilinear grid constructor.
 		"""
 		self.refresh()
 		if meshname: self._meshname = meshname
-		if self.meshname=='': self._meshname='fdata.grid'
-		outfile = open(self.meshname,'w')
+		if self.meshname=='': self._meshname='default_GRID.inp'
+		
+		temp_path = fpath()
+		temp_path.filename = self.meshname
+		try:
+			os.makedirs(temp_path.absolute_to_file)
+		except:
+			pass		
+		outfile = open(temp_path.full_path,'w')
+		
 		outfile.write('coor\n')
 		outfile.write('   '+str(len(self.nodelist))+'\n')
 		for nd in self.nodelist: 

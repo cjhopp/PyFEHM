@@ -355,7 +355,7 @@ class wellbore_model(fdata):
 		:param temperature_lims: Limits on temperature axis of temperature vs. time plot.
 		:type temperature_lims: lst[fl64,fl64]
 		
-		:param pdf: Name of pdf file to combine all output plots. If not specified, pdf will not be creted.
+		:param pdf: Name of pdf file to combine all output plots. If not specified, pdf will not be created.
 		:type pdf: str
 		
 		:param combineString: Name of ghostscript executable.
