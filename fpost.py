@@ -1184,6 +1184,7 @@ class fcontour(object): 					# Reading and plotting methods associated with cont
 			for t in self.times:
 				dat = self[t]
 				outdat.append(dat[variable][nd])
+			outdat = np.array(outdat)
 		elif variable == None:
 			ks = copy(self.variables); ks.remove('n')
 			outdat = dict([(k,self[time][k][nd]) for k in ks])			
@@ -1530,6 +1531,70 @@ class fzoneflux(fhistory): 					# Derived class of fhistory, for zoneflux output
 	def _get_zones(self): return self._zones
 	def _set_zones(self,value): self._zones = value
 	zones = property(_get_zones, _set_zones) #: (*lst[int]*) List of zone indices for which output data are available.
+class fnodeflux(object): 					# Reading and plotting methods associated with internode flux files.
+	'''Internode flux information.
+		
+		Can read either water or CO2 internode flux files.
+		
+		The fnodeflux object is indexed first by node pair - represented as a tuple of node indices - and then
+		by either the string 'liquid' or 'vapor'. Data values are in time order, as given in the 'times' attribute.
+	'''
+	def __init__(self,filename=None):
+		self._filename = filename
+		self._nodepairs = []
+		self._times = []
+		self._timesteps = []
+		self._data = {}
+		if self._filename: self.read(self._filename)
+	def __getitem__(self,key):
+		if key in self.nodepairs:
+			return self._data[key]
+		else: return None
+	def read(self,filename):
+		'''Read in FEHM contour output information.
+		
+		:param filename: File name for output data, can include wildcards to define multiple output files.
+		:type filename: str
+		'''
+		if not os.path.isfile(filename):
+			print 'ERROR: cannot find file at '+filename
+			return
+		fp = open(filename)
+		lns = fp.readlines()
+		N = int(lns[0].split()[1])
+		
+		data = np.zeros((N,len(lns)/(N+1),2)) 		# temporary data storage struc
+		
+		for ln in lns[1:N+1]:
+			ln = ln.split()
+			self._nodepairs.append((int(float(ln[0])),int(float(ln[1])))) 	# append node pair
+		
+		for i in range(len(lns)/(N+1)):
+			ln = lns[(N+1)*i:(N+1)*(i+1)]
+			
+			nums = ln[0].split()
+			self._timesteps.append(float(nums[2]))
+			self._times.append(float(nums[3]))
+			for j,lni in enumerate(ln[1:]):
+				lnis = lni.split()
+				data[j,i,0] = float(lnis[2])
+				data[j,i,1] = float(lnis[3])
+				
+		for i,nodepair in enumerate(self.nodepairs):
+			self._data[nodepair] = dict([(var,data[i,:,icol]) for icol,var in enumerate(['vapor','liquid'])])
+			
+	def _get_filename(self): return self._filename
+	def _set_filename(self,value): self._filename = value
+	filename = property(_get_filename, _set_filename) #: (*str*) filename target for internode flux file.
+	def _get_timesteps(self): return np.sort(self._timesteps)
+	def _set_timesteps(self,value): self._timesteps = value
+	timesteps = property(_get_timesteps, _set_timesteps) #: (*lst*) timestep for which node flux information is reported.
+	def _get_times(self): return np.sort(self._times)
+	def _set_times(self,value): self._times = value
+	times = property(_get_times, _set_times) #: (*lst*) times for which node flux information is reported.
+	def _get_nodepairs(self): return self._nodepairs
+	def _set_nodepairs(self,value): self._nodepairs = value
+	nodepairs = property(_get_nodepairs, _set_nodepairs) #: (*lst*) node pairs for which node flux information is available. Each node pair is represented as a two item tuple of node indices.
 class multi_pdf(object):
 	'''Tool for making a single pdf document from multiple eps files.'''
 	def __init__(self,combineString = 'gswin64',
@@ -1539,16 +1604,16 @@ class multi_pdf(object):
 		self._delete_files = delete_files
 		self._assign_files(files)
 	def _assign_files(self,files):
-		if files == []: self._files = ImmutableDict({})
+		if files == []: self._files = {}
 		if isinstance(files,list):
-			self._files = ImmutableDict(dict([(i+1,file) for i,file in enumerate(files)]))
+			self._files = dict([(i+1,file) for i,file in enumerate(files)])
 		elif isinstance(files,dict):
 			ks = files.keys()
 			for k in ks:
 				if not isinstance(k,int):print 'ERROR: Dictionary keys must be integers.'; return
-			self._files = ImmutableDict(files)
+			self._files = files
 		elif isinstance(files,str):
-			self._files = ImmutableDict(dict(((1,files),)))
+			self._files = dict(((1,files),))
 	def add(self,filename,pagenum=None):
 		'''Add a new page. If a page number is specified, the page will replace the current. 
 		Otherwise it will be appended to the end of the document.
@@ -1583,8 +1648,8 @@ class multi_pdf(object):
 			
 		if pagenum > self._pagemax: self.add(filename); return
 		ks = self._files.keys()
-		self._files = ImmutableDict(dict([(k,self._files[k]) for k in ks if k < pagenum]+
-		[(pagenum,filename)]+[(k+1,self._files[k]) for k in ks if k >= pagenum]))			
+		self._files = dict([(k,self._files[k]) for k in ks if k < pagenum]+
+		[(pagenum,filename)]+[(k+1,self._files[k]) for k in ks if k >= pagenum])
 	def make(self):
 		'''Construct the pdf.'''
 		cs = self.combineString + ' -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -sOutputFile='+self.save
